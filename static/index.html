@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>mediCore AI Chatbot</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <h1>mediCore AI Chatbot</h1>
+  <div id="chat"></div>
+  <div id="input">
+    <input id="question" placeholder="Ask your question..." autocomplete="off" />
+    <button id="send">Send</button>
+  </div>
+
+  <!-- Loading spinner -->
+  <div id="loading" class="hidden">
+    <div class="spinner"></div>
+    <span>Bot is typing...</span>
+  </div>
+
+  <script>
+    const chat = document.getElementById('chat');
+    const qBox = document.getElementById('question');
+    const sendBtn = document.getElementById('send');
+    const loading = document.getElementById('loading');
+
+    // Load existing session
+    let sessionUuid = localStorage.getItem('sessionUuid');
+
+    // Append a chat message
+    function appendMessage(text, cls) {
+      const div = document.createElement('div');
+      div.className = 'msg ' + cls;
+      div.textContent = text;
+      chat.appendChild(div);
+      chat.scrollTop = chat.scrollHeight;
+    }
+
+    // Append error message
+    function appendError(text) {
+      const div = document.createElement('div');
+      div.className = 'msg error';
+      div.textContent = text;
+      chat.appendChild(div);
+      chat.scrollTop = chat.scrollHeight;
+    }
+
+    // Append sources line
+    function appendSources(sources) {
+      if (!sources || sources.length === 0) return;
+      const div = document.createElement('div');
+      div.className = 'sources';
+      div.textContent = 'Sources: ' + sources.map(c => c.source).join(', ');
+      chat.appendChild(div);
+      chat.scrollTop = chat.scrollHeight;
+    }
+
+    // Replay history on load
+    async function replayHistory() {
+      if (!sessionUuid) return;
+      try {
+        const res = await fetch(`/sessions/${sessionUuid}/history`);
+        if (!res.ok) return;
+        const data = await res.json();
+        data.messages.forEach(msg => {
+          appendMessage(msg.content, msg.sender === 'user' ? 'user' : 'bot');
+        });
+      } catch (e) {
+        console.error('History replay failed', e);
+      }
+    }
+
+    // Send question to API
+    async function sendQuestion() {
+      const question = qBox.value.trim();
+      if (!question) return;
+      appendMessage(question, 'user');
+      qBox.value = '';
+      sendBtn.disabled = true;
+      loading.classList.remove('hidden');
+
+      try {
+        const res = await fetch('/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            question: question,
+            session_uuid: sessionUuid,
+            include_context: true
+          })
+        });
+        if (!res.ok) {
+          appendError('Server error – please try again.');
+        } else {
+          const data = await res.json();
+          appendMessage(data.answer, 'bot');
+          appendSources(data.context);
+          sessionUuid = data.session_uuid;
+          localStorage.setItem('sessionUuid', sessionUuid);
+        }
+      } catch (err) {
+        appendError('Network error – please try again.');
+      } finally {
+        loading.classList.add('hidden');
+        sendBtn.disabled = false;
+        qBox.focus();
+      }
+    }
+
+    // Event listeners
+    sendBtn.addEventListener('click', sendQuestion);
+    qBox.addEventListener('keydown', e => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        sendQuestion();
+      }
+    });
+
+    // Initialize on load
+    window.addEventListener('load', () => {
+      replayHistory();
+      qBox.focus();
+    });
+  </script>
+</body>
+</html>
