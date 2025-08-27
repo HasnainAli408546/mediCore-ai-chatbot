@@ -1,6 +1,18 @@
-.env
-venv/
+
+# Python
 __pycache__/
+*.py[cod]
+*.egg-info/
+*.sqlite3
 *.sqlite
 .DS_Store
 .idea/
+
+# Environments
+venv/
+.env
+
+# Railway/Deployment
+chromadb_data/
+static/
+.DS_Store

@@ -1,72 +1,105 @@
 import os
-from dotenv import load_dotenv
-import google.generativeai as genai
-from typing import List, Dict
-from .retrieval import format_context_for_prompt
 import logging
+from typing import List, Dict
+import google.generativeai as genai
+from dotenv import load_dotenv
 
+# Load environment variables and configure logging
 load_dotenv()
 logger = logging.getLogger(__name__)
-# Configure Gemini API key
-genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
 
-# Initialize the Gemini model
-MODEL_NAME = "gemini-2.5-flash"
-model = genai.GenerativeModel(MODEL_NAME)
+# Configure Google Gemini
+api_key = os.getenv("GOOGLE_API_KEY")
+if not api_key:
+    logger.error("GOOGLE_API_KEY not found in environment variables")
+    raise ValueError("GOOGLE_API_KEY not found in environment variables")
 
-def generate_medical_answer(
-    question: str,
-    context_chunks: List[Dict],
-    max_tokens: int = 500
-) -> str:
+genai.configure(api_key=api_key)
+logger.info("Google Generative AI configured successfully")
+
+def generate_medical_answer(query: str, context_chunks: List[Dict]) -> str:
     """
-    Use Google Gemini to generate a medical answer from context chunks.
+    Generate a medical answer using retrieved context and Google Gemini
     """
-    # Format retrieved context
-    context_text = format_context_for_prompt(context_chunks)
+    logger.info(f"Generating medical answer for query: '{query[:100]}...' using {len(context_chunks)} context chunks")
+    
+    if not context_chunks:
+        logger.warning("No context chunks provided, falling back to general response")
+        return generate_fallback_response(query)
+    
+    # Build context from chunks
+    context_text = ""
+    for chunk in context_chunks:
+        context_text += f"Source: {chunk['source']}\n"
+        context_text += f"Content: {chunk['text']}\n\n"
+    
+    logger.info(f"Built context from {len(context_chunks)} chunks, total context length: {len(context_text)} chars")
+    
+    # Create prompt
+    prompt = f"""
+You are a helpful medical AI assistant. Based on the provided medical context, answer the user's question accurately and safely.
 
-    # System prompt with guardrails
-    system_prompt = (
-        "You are mediCore AI, a medical assistant chatbot. Follow these rules:\n"
-        "1. Use ONLY the provided clinical sources.\n"
-        "2. Cite sources using [Source X] notation.\n"
-        "3. If data is insufficient, state limitations clearly.\n"
-        "4. Advise consulting healthcare professionals for personalized care.\n"
-        "5. Maintain professional, evidence-based tone.\n"
-        "6. Acknowledge uncertainty when sources conflict.\n"
-    )
+IMPORTANT GUIDELINES:
+1. Only use information from the provided context
+2. If the context doesn't contain relevant information, say so clearly
+3. Always recommend consulting healthcare professionals for medical decisions
+4. Never provide specific dosing or treatment recommendations without professional oversight
+5. Be clear about limitations and uncertainties
 
-    # User prompt combining context and question
-    user_prompt = (
-        f"Clinical Context:\n{context_text}\n\n"
-        f"Patient Question: {question}\n\n"
-        "Provide an evidence-based response using ONLY the provided sources."
-    )
+CONTEXT:
+{context_text}
+
+USER QUESTION: {query}
+
+ANSWER:"""
 
     try:
-        # Call Gemini to generate content
-        response = model.generate_content(
-            f"{system_prompt}\n\n{user_prompt}",
-            generation_config=genai.types.GenerationConfig(
-                max_output_tokens=max_tokens,
-                temperature=0.2,
-                top_p=0.8,
-                top_k=20
-            )
-        )
-        return response.text.strip()
+        logger.info("Sending request to Google Gemini API...")
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        response = model.generate_content(prompt)
+        
+        if response.text:
+            logger.info(f"Successfully generated response of {len(response.text)} characters")
+            return response.text
+        else:
+            logger.error("Empty response received from Gemini API")
+            return generate_fallback_response(query)
+            
     except Exception as e:
-        logger.error("Gemini generation error: %s", str(e))
-        return (
-            "I’m sorry, I encountered an error generating a response. "
-            "Please consult a healthcare professional for medical advice."
-        )
+        logger.error(f"Error generating medical answer with Gemini: {e}")
+        return generate_fallback_response(query)
 
-def generate_fallback_response(question: str) -> str:
+def generate_fallback_response(query: str) -> str:
     """
-    Provide a fallback when no relevant context is found.
+    Generate a safe fallback response when context-based generation fails
     """
-    return (
-        f"I don't have sufficient clinical context to answer your question about \"{question}\". "
-        "For accurate medical guidance, please consult a qualified healthcare professional."
-    )
+    logger.warning(f"Generating fallback response for query: '{query[:50]}...'")
+    
+    fallback_prompt = f"""
+You are a medical AI assistant. The user asked: "{query}"
+
+Since specific medical context is not available, provide a general, safe response that:
+1. Acknowledges their question
+2. Provides general health information if appropriate
+3. Strongly recommends consulting healthcare professionals
+4. Mentions limitations without specific medical context
+
+Keep the response helpful but conservative and safe.
+
+ANSWER:"""
+
+    try:
+        logger.info("Sending fallback request to Google Gemini API...")
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        response = model.generate_content(fallback_prompt)
+        
+        if response.text:
+            logger.info(f"Successfully generated fallback response of {len(response.text)} characters")
+            return response.text
+        else:
+            logger.error("Failed to generate fallback response from Gemini API")
+            return "I apologize, but I'm unable to provide a response at this time. Please consult with a healthcare professional for medical advice."
+            
+    except Exception as e:
+        logger.error(f"Error generating fallback response: {e}")
+        return "I apologize, but I'm experiencing technical difficulties. Please consult with a healthcare professional for medical advice."
